@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#34413C">
+<title>Tickets CB — Atelier AOR</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <img src="img/logo.jpg" alt="" class="top-logo">
+  <div class="top-title">
+    <div class="t1">Tickets carte bancaire</div>
+    <div class="t2">Atelier AOR Architecture</div>
+  </div>
+  <button class="icon-btn" id="btnSettings" aria-label="Réglages">⚙</button>
+</header>
+
+<!-- ============ ACCUEIL ============ -->
+<main id="scrHome" class="screen active">
+  <button class="big-btn orange" id="btnNew"><span class="cam">📷</span> Nouveau ticket</button>
+  <input type="file" id="fileInput" accept="image/*" capture="environment" hidden>
+
+  <div class="chips" id="chips"></div>
+  <div id="list"></div>
+
+  <div class="bottom-bar">
+    <button class="btn ardoise" id="btnExport">Exporter pour la comptable</button>
+  </div>
+</main>
+
+<!-- ============ ANALYSE / VÉRIFICATION ============ -->
+<main id="scrReview" class="screen">
+  <div class="bar-title"><button class="link" id="btnReviewBack">‹ Annuler</button><span id="reviewTitle">Nouveau ticket</span><span></span></div>
+
+  <div id="analysing" class="analysing">
+    <div class="spinner"></div>
+    <div id="analysingTxt">Lecture du ticket…</div>
+  </div>
+
+  <div id="reviewBody" hidden>
+    <div class="photo-wrap" id="photoWrap">
+      <img id="reviewImg" alt="Ticket">
+      <div id="cropBox" class="crop-box">
+        <span class="h tl"></span><span class="h tr"></span><span class="h bl"></span><span class="h br"></span>
+      </div>
+    </div>
+    <div class="pages" id="pages" hidden></div>
+    <p class="hint" id="cropHint">Ajuste le cadre orange sur les bords du ticket (coins à glisser).</p>
+
+    <div id="checks" class="checks"></div>
+
+    <form id="form" class="form" autocomplete="off">
+      <label>Catégorie
+        <select id="fCat">
+          <option value="essence">Essence</option>
+          <option value="restaurant">Restaurant</option>
+          <option value="fournitures">Fournitures</option>
+          <option value="peage">Péage</option>
+          <option value="autre">Autre</option>
+        </select>
+      </label>
+      <label>Date <input type="date" id="fDate" required></label>
+      <label>Fournisseur / provenance <input type="text" id="fFour" required></label>
+      <div class="row3">
+        <label>HT (€) <input type="text" inputmode="decimal" id="fHT"></label>
+        <label>TVA (€) <input type="text" inputmode="decimal" id="fTVA"></label>
+        <label>TTC (€) <input type="text" inputmode="decimal" id="fTTC"></label>
+      </div>
+      <label>Largeur réelle du papier (pour le PDF)
+        <select id="fLarg">
+          <option value="57">57 mm (petit ticket, carte bancaire)</option>
+          <option value="80">80 mm (ticket standard)</option>
+          <option value="110">110 mm</option>
+          <option value="148">148 mm (A5)</option>
+          <option value="210">210 mm (A4)</option>
+        </select>
+      </label>
+    </form>
+
+    <button class="btn light addpage" id="btnAddPage">➕ Ajouter une page (facture de plusieurs pages)</button>
+    <button class="big-btn" id="btnAdd" disabled>✔ Ajouter le ticket</button>
+    <button class="btn light" id="btnSkip" hidden>Ignorer ce ticket</button>
+    <div class="row2">
+      <button class="btn light" id="btnRetake">📷 Reprendre la photo</button>
+      <button class="btn danger" id="btnDelete" hidden>Supprimer</button>
+    </div>
+  </div>
+</main>
+
+<!-- ============ EXPORT ============ -->
+<main id="scrExport" class="screen">
+  <div class="bar-title"><button class="link" data-back>‹ Retour</button><span>Exporter</span><span></span></div>
+  <div class="card">
+    <div class="seg" id="seg">
+      <button data-mode="mois" class="on">Mois</button>
+      <button data-mode="trim">Trimestre</button>
+      <button data-mode="libre">Période</button>
+    </div>
+    <div data-pane="mois"><label>Mois <input type="month" id="eMois"></label></div>
+    <div data-pane="trim" hidden>
+      <div class="row2">
+        <label>Trimestre <select id="eTrim"><option value="1">T1 (janv.–mars)</option><option value="2">T2 (avr.–juin)</option><option value="3">T3 (juil.–sept.)</option><option value="4">T4 (oct.–déc.)</option></select></label>
+        <label>Année <input type="number" id="eAnnee" min="2020" max="2100"></label>
+      </div>
+    </div>
+    <div data-pane="libre" hidden>
+      <div class="row2">
+        <label>Du <input type="date" id="eDu"></label>
+        <label>Au <input type="date" id="eAu"></label>
+      </div>
+    </div>
+    <div id="eSummary" class="summary"></div>
+  </div>
+  <button class="big-btn orange" id="btnGen">Créer l'Excel + le PDF</button>
+  <div id="eResult" class="card" hidden>
+    <div class="files" id="eFiles"></div>
+    <button class="big-btn" id="btnShare">✉ Envoyer (mail…)</button>
+  </div>
+</main>
+
+<!-- ============ RÉGLAGES ============ -->
+<main id="scrSettings" class="screen">
+  <div class="bar-title"><button class="link" data-back>‹ Retour</button><span>Réglages</span><span></span></div>
+  <div class="card">
+    <label>Clé API (lecture des tickets)
+      <input type="password" id="sKey" placeholder="sk-ant-…">
+    </label>
+    <label>Modèle
+      <input type="text" id="sModel">
+    </label>
+    <label>E-mail de la comptable (pour l'envoi)
+      <input type="email" id="sMail" placeholder="adresse@cabinet.fr">
+    </label>
+    <button class="btn ardoise" id="btnSaveSettings">Enregistrer</button>
+  </div>
+  <div class="card">
+    <div class="card-title">Sauvegarde</div>
+    <p class="hint">Les tickets sont enregistrés uniquement sur ce téléphone. Fais une sauvegarde de temps en temps (Google Drive, mail…).</p>
+    <div class="row2">
+      <button class="btn light" id="btnBackup">Sauvegarder</button>
+      <button class="btn light" id="btnRestore">Restaurer</button>
+    </div>
+    <input type="file" id="restoreInput" accept=".json,application/json" hidden>
+    <p class="hint" id="storageInfo"></p>
+  </div>
+</main>
+
+<div id="toast" class="toast"></div>
+
+<script src="app.js"></script>
+<script src="export.js"></script>
+</body>
+</html>
