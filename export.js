@@ -82,6 +82,10 @@ $('#btnGen').onclick = async () => {
 };
 $('#btnShare').onclick = async () => {
   const p = eFiles.period;
+  // Android ne laisse pas l'appli remplir le destinataire : on copie l'adresse pour la coller dans « À »
+  if (settings.mail && navigator.clipboard) {
+    navigator.clipboard.writeText(settings.mail).then(() => toast('Adresse de la comptable copiée : colle-la dans « À »', 4000)).catch(() => {});
+  }
   const text = `Bonjour Madame,\n\nVeuillez trouver ci-joint le relevé des dépenses réglées par carte bancaire (${p.label}) : le tableau Excel et les justificatifs en PDF.\n\nBien cordialement,\nReda Ourdani\nAtelier AOR Architecture`;
   const ok = await shareOrDownload(eFiles, `Dépenses carte bancaire — ${p.label}`, text);
   if (ok && settings.mail && !(navigator.canShare && navigator.canShare({ files: eFiles }))) {

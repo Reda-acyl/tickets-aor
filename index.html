@@ -23,8 +23,14 @@
 
 <!-- ============ ACCUEIL ============ -->
 <main id="scrHome" class="screen active">
-  <button class="big-btn orange" id="btnNew"><span class="cam">📷</span> Nouveau ticket</button>
+  <div class="new-row">
+    <button class="big-btn orange" id="btnPhoto"><span class="cam">📷</span> Photo</button>
+    <button class="big-btn orange" id="btnDoc"><span class="cam">📄</span> Document</button>
+  </div>
+  <p class="hint center">« Document » redresse le ticket comme un scan, même pris de travers.</p>
+  <button class="link gal" id="btnGallery">🖼 Choisir une image dans la galerie</button>
   <input type="file" id="fileInput" accept="image/*" capture="environment" hidden>
+  <input type="file" id="galleryInput" accept="image/*" hidden>
 
   <div class="chips" id="chips"></div>
   <div id="list"></div>
@@ -46,13 +52,12 @@
   <div id="reviewBody" hidden>
     <div class="photo-wrap" id="photoWrap">
       <img id="reviewImg" alt="Ticket">
-      <div id="cropBox" class="crop-box">
-        <span class="h tl"></span><span class="h tr"></span><span class="h bl"></span><span class="h br"></span>
-      </div>
+      <svg id="cropSvg" class="crop-svg"></svg>
     </div>
     <div class="pages" id="pages" hidden></div>
     <p class="hint" id="cropHint">Ajuste le cadre orange sur les bords du ticket (coins à glisser).</p>
 
+    <label class="switch" id="docRow"><input type="checkbox" id="fDoc"> <span>Redresser le ticket (mode Document)</span></label>
     <div id="checks" class="checks"></div>
 
     <form id="form" class="form" autocomplete="off">

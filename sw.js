@@ -1,4 +1,4 @@
-const VERSION = 'aor-tickets-v2';
+const VERSION = 'aor-tickets-v3';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'export.js', 'manifest.webmanifest',
   'lib/exceljs.min.js', 'lib/jspdf.umd.min.js', 'lib/carlito-Regular.js', 'lib/carlito-Bold.js',
   'fonts/Carlito-Regular.ttf', 'fonts/Carlito-Bold.ttf', 'img/logo.jpg', 'img/entete.jpg',

@@ -82,7 +82,7 @@ function renderList() {
   const list = tickets.filter(t => filter === 'tous' || t.cat === filter)
     .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
   if (!list.length) {
-    $('#list').innerHTML = `<div class="empty">${tickets.length ? 'Aucun ticket dans cette catégorie.' : 'Aucun ticket pour l\'instant.<br>Appuie sur « Nouveau ticket » pour photographier ton premier ticket.'}</div>`;
+    $('#list').innerHTML = `<div class="empty">${tickets.length ? 'Aucun ticket dans cette catégorie.' : 'Aucun ticket pour l\'instant.<br>Appuie sur « Photo » ou « Document » pour photographier ton premier ticket.'}</div>`;
     return;
   }
   const groups = {};
@@ -104,21 +104,29 @@ function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;'
 /* ---------------- Prise de photo ---------------- */
 // Un ticket = une ou plusieurs « pièces » (pages d'une facture, ou ticket + facturette CB du même achat).
 // Une photo peut contenir plusieurs tickets : ils sont découpés automatiquement et vérifiés l'un après l'autre.
-$('#btnNew').onclick = () => {
-  if (!settings.key) { toast('Renseigne d\'abord la clé API dans les réglages ⚙', 3500); show('scrSettings'); return; }
-  pickPhoto('new');
-};
-$('#btnRetake').onclick = () => pickPhoto('new');
-$('#btnAddPage').onclick = () => pickPhoto('page');
-let pickMode = 'new';
-function pickPhoto(mode) { pickMode = mode; $('#fileInput').value = ''; $('#fileInput').click(); }
-$('#fileInput').onchange = e => {
+// « Photo » : cadre rectangulaire. « Document » : le ticket est redressé (correction de perspective), comme un scan.
+function needKey() {
+  if (settings.key) return false;
+  toast('Renseigne d\'abord la clé API dans les réglages ⚙', 3500); show('scrSettings'); return true;
+}
+$('#btnPhoto').onclick = () => { if (!needKey()) pickPhoto('new', false); };
+$('#btnDoc').onclick = () => { if (!needKey()) pickPhoto('new', true); };
+$('#btnGallery').onclick = () => { if (!needKey()) pickPhoto('new', false, true); };
+$('#btnRetake').onclick = () => pickPhoto('new', lastDoc);
+$('#btnAddPage').onclick = () => pickPhoto('page', draft()?.doc);
+let pickMode = 'new', pickDoc = false, lastDoc = false;
+function pickPhoto(mode, doc, gallery) {
+  pickMode = mode; pickDoc = !!doc;
+  const inp = gallery ? $('#galleryInput') : $('#fileInput'); inp.value = ''; inp.click();
+}
+const onPicked = e => {
   const f = e.target.files[0]; if (!f) return;
-  if (pickMode === 'page') addPage(f); else startReview(f);
+  if (pickMode === 'page') addPage(f); else { lastDoc = pickDoc; startReview(f, pickDoc); }
 };
+$('#fileInput').onchange = onPicked; $('#galleryInput').onchange = onPicked;
 
 let cur = null;   // { mode:'new'|'edit', queue:[draft], qi, id }
-// draft = { pages:[{img|blob, crop, largeur, w, h}], pi, data, ai, err, touched }
+// draft = { doc, pages:[{img|blob, q:[[x,y]×4 haut-g, haut-d, bas-d, bas-g], aiQ, largeur, w, h}], pi, data, ai, err, touched }
 const draft = () => cur && cur.queue[cur.qi];
 const page = () => draft() && draft().pages[draft().pi];
 
@@ -140,6 +148,20 @@ function imgToJpeg(img, maxSide, quality, crop) {
 }
 const blobToB64 = b => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result.split(',')[1]); fr.readAsDataURL(b); });
 const FULL = { x0: 0.02, y0: 0.02, x1: 0.98, y1: 0.98 };
+const rectQ = c => [[c.x0, c.y0], [c.x1, c.y0], [c.x1, c.y1], [c.x0, c.y1]];
+const bboxOf = q => ({ x0: Math.min(...q.map(p => p[0])), y0: Math.min(...q.map(p => p[1])), x1: Math.max(...q.map(p => p[0])), y1: Math.max(...q.map(p => p[1])) });
+function sanitizeQuad(c) {
+  if (!Array.isArray(c) || c.length !== 4) return null;
+  const q = c.map(p => [Math.min(1, Math.max(0, Number(p[0]))), Math.min(1, Math.max(0, Number(p[1])))]);
+  if (q.some(p => isNaN(p[0]) || isNaN(p[1]))) return null;
+  // aire (formule du lacet) : on rejette un quadrilatère trop petit ou croisé
+  let a = 0; for (let i = 0; i < 4; i++) { const [x1, y1] = q[i], [x2, y2] = q[(i + 1) % 4]; a += x1 * y2 - x2 * y1; }
+  return Math.abs(a / 2) > 0.003 ? q : null;
+}
+function makePage(img, z, largeur, doc) {
+  const rect = z ? sanitizeCrop(z) : { ...FULL }, aiQ = z ? sanitizeQuad(z.coins) : null;
+  return { img, aiQ, q: doc && aiQ ? aiQ : rectQ(aiQ ? sanitizeCrop(bboxOf(aiQ)) : rect), largeur: nearestWidth(largeur), doc };
+}
 
 function spinner(on, txt = 'Lecture du ticket…') {
   $('#analysing').hidden = !on; $('#reviewBody').hidden = on; $('#analysingTxt').textContent = txt;
@@ -150,7 +172,7 @@ function dataFromAI(t) {
     ht: num(t.ht), tva: num(t.tva), ttc: num(t.ttc) };
 }
 
-async function startReview(file) {
+async function startReview(file, doc) {
   show('scrReview', !$('#scrReview').classList.contains('active'));
   $('#btnDelete').hidden = true;
   spinner(true);
@@ -163,11 +185,11 @@ async function startReview(file) {
     if (list.length) {
       queue = list.map(t => {
         const zones = (Array.isArray(t.cadres) && t.cadres.length) ? t.cadres : [{ ...FULL, largeur_mm: t.largeur_papier_mm }];
-        return { pages: zones.map(z => ({ img, crop: sanitizeCrop(z), largeur: nearestWidth(z.largeur_mm || t.largeur_papier_mm) })),
+        return { doc, pages: zones.map(z => makePage(img, z, z.largeur_mm || t.largeur_papier_mm, doc)),
           pi: 0, data: dataFromAI(t), ai: { lisible: t.lisible !== false && ai.lisible !== false, probleme: t.probleme || ai.probleme }, err: null };
       });
     } else {
-      queue = [{ pages: [{ img, crop: { ...FULL }, largeur: 80 }], pi: 0,
+      queue = [{ doc, pages: [makePage(img, null, 80, doc)], pi: 0,
         data: { cat: 'autre', date: todayISO(), fournisseur: '', ht: null, tva: null, ttc: null },
         ai: ai ? { lisible: false, probleme: ai.probleme || 'aucun ticket reconnu sur la photo' } : null, err }];
     }
@@ -185,12 +207,12 @@ async function addPage(file) {
   spinner(true, `Lecture des ${d.pages.length + 1} pages…`);
   try {
     const img = await loadImage(file);
-    d.pages.push({ img, crop: { ...FULL }, largeur: d.pages[0].largeur });
+    d.pages.push(makePage(img, null, d.pages[0].largeur, d.doc));
     d.pi = d.pages.length - 1;
     try {
       const ai = await analyse(d.pages.map(p => p.img), 'pages');
       d.data = dataFromAI(ai); d.ai = { lisible: ai.lisible !== false, probleme: ai.probleme }; d.err = null; d.touched = false;
-      (ai.cadres || []).forEach((z, i) => { if (d.pages[i]) { d.pages[i].crop = sanitizeCrop(z); if (z.largeur_mm) d.pages[i].largeur = nearestWidth(z.largeur_mm); } });
+      (ai.cadres || []).forEach((z, i) => { const p = d.pages[i]; if (p) d.pages[i] = makePage(p.img, z, z.largeur_mm || p.largeur, d.doc); });
     } catch (e) { d.err = e.message; d.data = readForm(); }
   } catch (e) { toast('Impossible d\'ouvrir la photo : ' + e.message, 4000); }
   showDraft();
@@ -202,6 +224,7 @@ function showDraft() {
   $('#btnRetake').hidden = !isNew || cur.qi > 0;
   $('#btnSkip').hidden = !(isNew && n > 1);
   $('#btnAddPage').hidden = !(isNew && n === 1);
+  $('#docRow').hidden = !isNew; $('#fDoc').checked = !!d.doc;
   fillForm(d.data);
   renderPages(); showPage();
 }
@@ -240,19 +263,20 @@ const CHAMPS = `- "categorie" : essence = carburant/station-service ; restaurant
 - "date" : date de l'achat (AAAA-MM-JJ).
 - "lisible" : false si le document est flou, coupé, trop sombre, ou si le TTC ou la date ne peuvent pas être lus avec certitude ; explique alors brièvement dans "probleme" (en français).
 - Coordonnées des cadres en fractions de la largeur et de la hauteur de l'image (0 = bord gauche/haut, 1 = bord droit/bas), englobant tout le papier, sans déborder sur les papiers voisins.
+- "coins" : les 4 coins réels du papier, dans l'ordre haut-gauche, haut-droit, bas-droit, bas-gauche (par rapport au texte du ticket), en fractions [x, y]. Suis précisément les bords du papier même s'il est de travers ou photographié en perspective.
 - "largeur_mm" : largeur réelle estimée du papier (57 pour une facturette de carte bancaire, 80 pour un ticket de caisse standard, 148 pour un A5, 210 pour un A4).`;
 
 const PROMPT_PHOTO = `Tu analyses une photo prise par un architecte, sur laquelle il peut y avoir UN ou PLUSIEURS tickets de caisse / facturettes / factures français (payés avec la carte bancaire de son cabinet), posés côte à côte.
 Repère chaque achat distinct. Si une facturette de carte bancaire correspond au même achat qu'un ticket de caisse présent sur la photo (même commerçant ou même montant), ne crée pas d'achat séparé : ajoute simplement son cadre à cet achat.
 Réponds UNIQUEMENT avec un objet JSON valide, sans texte autour :
-{"lisible": true, "probleme": "", "tickets": [{"lisible": true, "probleme": "", "categorie": "essence|restaurant|fournitures|peage|autre", "date": "AAAA-MM-JJ", "fournisseur": "", "ht": 0.00, "tva": 0.00, "ttc": 0.00, "cadres": [{"x0":0,"y0":0,"x1":1,"y1":1,"largeur_mm":80}]}]}
+{"lisible": true, "probleme": "", "tickets": [{"lisible": true, "probleme": "", "categorie": "essence|restaurant|fournitures|peage|autre", "date": "AAAA-MM-JJ", "fournisseur": "", "ht": 0.00, "tva": 0.00, "ttc": 0.00, "cadres": [{"x0":0,"y0":0,"x1":1,"y1":1,"coins":[[0,0],[1,0],[1,1],[0,1]],"largeur_mm":80}]}]}
 Ordonne les tickets de gauche à droite puis de haut en bas. Si aucun ticket n'est visible, renvoie "tickets": [] avec "lisible": false et la raison.
 Règles :
 ${CHAMPS}`;
 
 const promptPages = n => `Ces ${n} photos sont les pages successives d'UNE SEULE facture (ou d'un même ticket long photographié en plusieurs fois), payée avec la carte bancaire d'un cabinet d'architecture. Lis l'ensemble : le total est généralement sur la dernière page.
 Réponds UNIQUEMENT avec un objet JSON valide, sans texte autour :
-{"lisible": true, "probleme": "", "categorie": "essence|restaurant|fournitures|peage|autre", "date": "AAAA-MM-JJ", "fournisseur": "", "ht": 0.00, "tva": 0.00, "ttc": 0.00, "cadres": [{"x0":0,"y0":0,"x1":1,"y1":1,"largeur_mm":210}]}
+{"lisible": true, "probleme": "", "categorie": "essence|restaurant|fournitures|peage|autre", "date": "AAAA-MM-JJ", "fournisseur": "", "ht": 0.00, "tva": 0.00, "ttc": 0.00, "cadres": [{"x0":0,"y0":0,"x1":1,"y1":1,"coins":[[0,0],[1,0],[1,1],[0,1]],"largeur_mm":210}]}
 "cadres" contient exactement ${n} éléments : le cadre du document sur chaque photo, dans l'ordre des photos.
 Règles :
 ${CHAMPS}`;
@@ -334,10 +358,10 @@ function runChecks() {
   b.textContent = !isNew ? '✔ Enregistrer' : n > 1 ? `✔ Ajouter ce ticket (${cur.qi + 1}/${n})` : '✔ Ajouter le ticket';
 }
 
-/* ---------------- Cadre de recadrage ---------------- */
+/* ---------------- Cadre de recadrage (rectangle ou quadrilatère libre) ---------------- */
 function showPhoto(src, editable) {
   const img = $('#reviewImg');
-  $('#cropBox').hidden = !editable; $('#cropHint').hidden = !editable;
+  $('#cropSvg').hidden = !editable; $('#cropHint').hidden = !editable;
   img.onload = placeCrop; img.src = src; if (img.complete) placeCrop();
 }
 function imgRect() {
@@ -347,37 +371,94 @@ function imgRect() {
   return { left: (W - w) / 2 + img.offsetLeft, top: (H - h) / 2 + img.offsetTop, w, h, wrap };
 }
 function placeCrop() {
-  if (!cur || cur.mode !== 'new') return;
-  const R = imgRect(), c = page().crop, b = $('#cropBox');
-  b.style.left = R.left + c.x0 * R.w + 'px'; b.style.top = R.top + c.y0 * R.h + 'px';
-  b.style.width = (c.x1 - c.x0) * R.w + 'px'; b.style.height = (c.y1 - c.y0) * R.h + 'px';
+  if (!cur || cur.mode !== 'new' || !page()) return;
+  const R = imgRect(), p = page(), svg = $('#cropSvg');
+  const W = R.wrap.clientWidth, H = R.wrap.clientHeight;
+  const pts = p.q.map(([x, y]) => [R.left + x * R.w, R.top + y * R.h]);
+  const poly = pts.map(pt => pt.join(',')).join(' ');
+  $('#cropHint').textContent = p.doc
+    ? 'Mode Document : place les 4 coins orange sur les coins du ticket, il sera redressé automatiquement.'
+    : 'Ajuste le cadre orange sur les bords du ticket (coins à glisser).';
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.innerHTML = `<path fill="rgba(0,0,0,.45)" fill-rule="evenodd" d="M0 0H${W}V${H}H0Z M${pts.map(pt => pt.join(' ')).join(' L')} Z"/>
+    <polygon points="${poly}" fill="none" stroke="#FD9019" stroke-width="3"/>
+    ${pts.map(([x, y]) => `<circle cx="${x}" cy="${y}" r="15" fill="#FD9019" stroke="#fff" stroke-width="3"/>`).join('')}`;
 }
 window.addEventListener('resize', placeCrop);
+$('#fDoc').addEventListener('change', e => {
+  const d = draft(); if (!d) return; d.doc = lastDoc = e.target.checked;
+  d.pages.forEach(p => { p.doc = d.doc; p.q = d.doc ? (p.aiQ || p.q) : rectQ(bboxOf(p.q)); });
+  placeCrop();
+});
 (function cropDrag() {
-  let drag = null;
+  let drag = -1;
+  const XP = [3, 2, 1, 0], YP = [1, 0, 3, 2];   // coins qui partagent x / y dans un rectangle
+  const pos = e => { const R = imgRect(), rect = R.wrap.getBoundingClientRect();
+    return [Math.min(1, Math.max(0, (e.clientX - rect.left - R.left) / R.w)), Math.min(1, Math.max(0, (e.clientY - rect.top - R.top) / R.h)), R]; };
   $('#photoWrap').addEventListener('pointerdown', e => {
     if (!cur || cur.mode !== 'new') return;
-    const R = imgRect(), rect = R.wrap.getBoundingClientRect();
-    const px = (e.clientX - rect.left - R.left) / R.w, py = (e.clientY - rect.top - R.top) / R.h;
-    const c = page().crop; const corners = { tl: [c.x0, c.y0], tr: [c.x1, c.y0], bl: [c.x0, c.y1], br: [c.x1, c.y1] };
-    let best = null, bd = 1e9;
-    for (const [k, [x, y]] of Object.entries(corners)) { const d = Math.hypot((x - px) * R.w, (y - py) * R.h); if (d < bd) { bd = d; best = k; } }
-    if (bd > 60) return;
-    drag = best; R.wrap.setPointerCapture(e.pointerId); e.preventDefault();
+    const [px, py, R] = pos(e); let bd = 1e9;
+    page().q.forEach(([x, y], i) => { const d = Math.hypot((x - px) * R.w, (y - py) * R.h); if (d < bd) { bd = d; drag = i; } });
+    if (bd > 60) { drag = -1; return; }
+    R.wrap.setPointerCapture(e.pointerId); e.preventDefault();
   });
   $('#photoWrap').addEventListener('pointermove', e => {
-    if (!drag) return;
-    const R = imgRect(), rect = R.wrap.getBoundingClientRect();
-    const px = Math.min(1, Math.max(0, (e.clientX - rect.left - R.left) / R.w));
-    const py = Math.min(1, Math.max(0, (e.clientY - rect.top - R.top) / R.h));
-    const c = page().crop, m = 0.03;
-    if (drag[1] === 'l') c.x0 = Math.min(px, c.x1 - m); else c.x1 = Math.max(px, c.x0 + m);
-    if (drag[0] === 't') c.y0 = Math.min(py, c.y1 - m); else c.y1 = Math.max(py, c.y0 + m);
+    if (drag < 0) return;
+    const [px, py] = pos(e), p = page(), q = p.q;
+    q[drag] = [px, py];
+    if (!p.doc) { q[XP[drag]][0] = px; q[YP[drag]][1] = py; }
     placeCrop();
   });
-  const end = () => { drag = null; };
+  const end = () => {
+    if (drag >= 0 && !page().doc) page().q = rectQ(bboxOf(page().q));   // garde un rectangle bien orienté
+    drag = -1;
+  };
   $('#photoWrap').addEventListener('pointerup', end); $('#photoWrap').addEventListener('pointercancel', end);
 })();
+
+/* ---------------- Redressement (mode Document) ---------------- */
+// Homographie : (u,v) du rectangle d'arrivée → (x,y) dans la photo
+function homography(dst, src) {
+  const A = [], B = [];
+  for (let i = 0; i < 4; i++) {
+    const [u, v] = dst[i], [x, y] = src[i];
+    A.push([u, v, 1, 0, 0, 0, -u * x, -v * x]); B.push(x);
+    A.push([0, 0, 0, u, v, 1, -u * y, -v * y]); B.push(y);
+  }
+  for (let c = 0; c < 8; c++) {   // pivot de Gauss
+    let m = c; for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[m][c])) m = r;
+    [A[c], A[m]] = [A[m], A[c]]; [B[c], B[m]] = [B[m], B[c]];
+    for (let r = 0; r < 8; r++) if (r !== c) {
+      const f = A[r][c] / A[c][c]; for (let k = c; k < 8; k++) A[r][k] -= f * A[c][k]; B[r] -= f * B[c];
+    }
+  }
+  return B.map((b, i) => b / A[i][i]);
+}
+function warpToJpeg(img, q, targetW, quality) {
+  // photo source limitée à 3000 px pour la mémoire du téléphone
+  const s = Math.min(1, 3000 / Math.max(img.naturalWidth, img.naturalHeight));
+  const sw = Math.round(img.naturalWidth * s), sh = Math.round(img.naturalHeight * s);
+  const sc = document.createElement('canvas'); sc.width = sw; sc.height = sh;
+  const sctx = sc.getContext('2d', { willReadFrequently: true }); sctx.drawImage(img, 0, 0, sw, sh);
+  const src = sctx.getImageData(0, 0, sw, sh).data;
+  const P = q.map(([x, y]) => [x * sw, y * sh]);
+  const d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const W0 = Math.max(d(P[0], P[1]), d(P[3], P[2])), H0 = Math.max(d(P[0], P[3]), d(P[1], P[2]));
+  const k = Math.min(1.5, targetW / W0), W = Math.max(1, Math.round(W0 * k)), H = Math.max(1, Math.round(H0 * k));
+  const [a, b, c, dd, e, f, g, h] = homography([[0, 0], [W, 0], [W, H], [0, H]], P);
+  const out = new ImageData(W, H), o = out.data;
+  for (let v = 0; v < H; v++) for (let u = 0; u < W; u++) {
+    const z = g * u + h * v + 1, x = (a * u + b * v + c) / z, y = (dd * u + e * v + f) / z;
+    const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0, oi = (v * W + u) * 4;
+    if (x0 < 0 || y0 < 0 || x0 >= sw - 1 || y0 >= sh - 1) { o[oi] = o[oi + 1] = o[oi + 2] = 255; o[oi + 3] = 255; continue; }
+    const i00 = (y0 * sw + x0) * 4, i10 = i00 + 4, i01 = i00 + sw * 4, i11 = i01 + 4;
+    for (let ch = 0; ch < 3; ch++)
+      o[oi + ch] = (src[i00 + ch] * (1 - fx) + src[i10 + ch] * fx) * (1 - fy) + (src[i01 + ch] * (1 - fx) + src[i11 + ch] * fx) * fy;
+    o[oi + 3] = 255;
+  }
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H; cv.getContext('2d').putImageData(out, 0, 0);
+  return new Promise(r => cv.toBlob(bl => r({ blob: bl, w: W, h: H }), 'image/jpeg', quality));
+}
 
 /* ---------------- Ajout / modification / suppression ---------------- */
 // résolution conservée : ≈ 300 dpi à taille réelle, plafonnée
@@ -390,7 +471,9 @@ $('#btnAdd').onclick = async () => {
     if (cur.mode === 'new') {
       const dr = draft(), photos = [];
       for (const p of dr.pages) {
-        const { blob, w, h } = await imgToJpeg(p.img, { w: storedWidth(p.largeur) }, 0.92, p.crop);
+        const { blob, w, h } = p.doc
+          ? await warpToJpeg(p.img, p.q, storedWidth(p.largeur), 0.92)
+          : await imgToJpeg(p.img, { w: storedWidth(p.largeur) }, 0.92, bboxOf(p.q));
         photos.push({ blob, w, h, largeur: p.largeur });
       }
       await DB.put({ id: 't' + Date.now() + Math.random().toString(36).slice(2, 6), createdAt: Date.now(), ...d, photos });
